@@ -22,6 +22,8 @@ struct Dashboard {
     error: Option<String>,
     granted: bool,
     session_name: Option<String>,
+    tabs: Vec<TabInfo>,
+    panes: PaneManifest,
     loading: bool,
     scroll: usize,
     instance_offsets: Vec<usize>,
@@ -152,6 +154,28 @@ impl Dashboard {
         }
     }
 
+    fn pane_location(&self, pane_id: &str) -> Option<String> {
+        let pane_id = pane_id.parse::<u32>().ok()?;
+        self.panes.panes.iter().find_map(|(tab_position, panes)| {
+            let pane = panes
+                .iter()
+                .find(|pane| !pane.is_plugin && pane.id == pane_id)?;
+            let pane_name = (!pane.title.trim().is_empty()).then(|| pane.title.trim());
+            let tab_name = self
+                .tabs
+                .iter()
+                .find(|tab| tab.position == *tab_position)
+                .map(|tab| tab.name.trim())
+                .filter(|name| !name.is_empty());
+            match (tab_name, pane_name) {
+                (Some(tab), Some(pane)) if tab != pane => Some(format!("tab:{tab} · pane:{pane}")),
+                (_, Some(pane)) => Some(format!("pane:{pane}")),
+                (Some(tab), None) => Some(format!("tab:{tab}")),
+                (None, None) => None,
+            }
+        })
+    }
+
     fn refresh(&mut self) {
         if self.granted && !self.loading && self.session_name.is_some() {
             self.loading = true;
@@ -221,13 +245,14 @@ impl Dashboard {
                 .or(session.instance_name.as_deref())
                 .unwrap_or("pi");
             let model = session.model.as_deref().unwrap_or("unknown model");
-            let pane = session
+            let location = session
                 .pane_id
                 .as_deref()
-                .map(|id| format!(" pane:{id}"))
+                .and_then(|id| self.pane_location(id))
+                .map(|location| format!("  {location}"))
                 .unwrap_or_default();
             lines.push(format!(
-                "{state}{mode}  {name}{pane}  {model}  pid:{}",
+                "{state}{mode}  {name}{location}  {model}  pid:{}",
                 session.pid
             ));
             if let Some(cwd) = &session.cwd {
@@ -432,6 +457,8 @@ impl ZellijPlugin for Dashboard {
             EventType::Timer,
             EventType::RunCommandResult,
             EventType::ModeUpdate,
+            EventType::TabUpdate,
+            EventType::PaneUpdate,
             EventType::Key,
             EventType::Mouse,
         ]);
@@ -450,6 +477,14 @@ impl ZellijPlugin for Dashboard {
             Event::ModeUpdate(mode) => {
                 self.session_name = mode.session_name;
                 self.refresh();
+                true
+            }
+            Event::TabUpdate(tabs) => {
+                self.tabs = tabs;
+                true
+            }
+            Event::PaneUpdate(panes) => {
+                self.panes = panes;
                 true
             }
             Event::PermissionRequestResult(PermissionStatus::Granted) => {
@@ -713,6 +748,37 @@ mod tests {
         let styled = styled_wrapped_line("  Goal  abcdef", 8);
         assert_eq!(styled.len(), 2);
         assert_ne!(styled[1].serialize(), Text::new("abcdef").serialize());
+    }
+
+    #[test]
+    fn renders_pane_and_tab_names_instead_of_id() {
+        let dashboard = Dashboard {
+            sessions: vec![Session {
+                pid: 42,
+                pane_id: Some("7".into()),
+                ..Default::default()
+            }],
+            tabs: vec![TabInfo {
+                position: 2,
+                name: "project".into(),
+                ..Default::default()
+            }],
+            panes: PaneManifest {
+                panes: std::collections::HashMap::from([(
+                    2,
+                    vec![PaneInfo {
+                        id: 7,
+                        title: "pi-work".into(),
+                        ..Default::default()
+                    }],
+                )]),
+            },
+            granted: true,
+            ..Default::default()
+        };
+        let rendered = dashboard.lines(120, 1_000).join("\n");
+        assert!(rendered.contains("tab:project · pane:pi-work"));
+        assert!(!rendered.contains("pane:7"));
     }
 
     #[test]

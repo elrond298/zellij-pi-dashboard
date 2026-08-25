@@ -79,4 +79,6 @@ type Workspace = { vcs: "git" | "jj"; root: string; name?: string; worktree?: bo
 
 `zjstatus/examples/pi-status.sh` consumes this layout and schema unchanged.
 
+Session headers resolve each Pi process to its live Zellij tab and pane names instead of showing the numeric pane ID.
+
 Use `Tab` to jump to the next Pi instance; use `j`/`k`, arrow keys, the mouse wheel, or `g` to scroll. Run `cargo test` for the parser/rendering check.
