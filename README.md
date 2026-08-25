@@ -71,6 +71,8 @@ type Agent = { id: string; type?: string; name?: string; description?: string; s
 type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: number; toolCalls: number };
 ```
 
+`agents` lists every running agent first, followed by the three most recently ended agents.
+
 `zjstatus/examples/pi-status.sh` consumes this layout and schema unchanged.
 
 Use `j`/`k`, arrow keys, or `g` to scroll. Run `cargo test` for the parser/rendering check.

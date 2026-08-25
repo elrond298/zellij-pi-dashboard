@@ -102,6 +102,7 @@ struct Agent {
     r#type: Option<String>,
     status: String,
     started_at: Option<u64>,
+    completed_at: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -248,9 +249,9 @@ impl Dashboard {
                 .iter()
                 .filter(|tool| tool.name == "Agent")
                 .collect();
+            let agents = display_agents(&session.agents);
             let legacy_agent = session.tools.is_empty() && session.tool.as_deref() == Some("Agent");
-            let agent_count =
-                active_agents.len() + session.agents.len() + usize::from(legacy_agent);
+            let agent_count = active_agents.len() + agents.len() + usize::from(legacy_agent);
             if agent_count > 0 {
                 lines.push(format!("  Agents ({agent_count})"));
             }
@@ -276,7 +277,7 @@ impl Dashboard {
             if legacy_agent {
                 lines.push("    ● Agent · running".into());
             }
-            for agent in &session.agents {
+            for agent in agents {
                 let age = agent
                     .started_at
                     .map(|time| elapsed(now.saturating_sub(time)))
@@ -410,12 +411,14 @@ impl ZellijPlugin for Dashboard {
         let lines = self.lines(cols, now_ms());
         let max_scroll = lines.len().saturating_sub(rows);
         self.scroll = self.scroll.min(max_scroll);
+        // Zellij's table renderer reserves one column for padding.
+        let table_width = cols.saturating_sub(1);
         let visible = lines
             .iter()
             .skip(self.scroll)
             .take(rows)
             .fold(Table::new(), |table, line| {
-                table.add_styled_row(vec![styled_line(&clip(line, cols))])
+                table.add_styled_row(vec![styled_line(&clip(line, table_width))])
             });
         print_table_with_coordinates(visible, 0, 0, Some(cols), Some(rows));
     }
@@ -432,6 +435,20 @@ fn agent_summary(name: Option<&str>, agent_type: Option<&str>, state: &str) -> S
     }
     parts.push(state);
     parts.join(" · ")
+}
+
+fn is_running_agent(agent: &Agent) -> bool {
+    matches!(agent.status.as_str(), "running" | "background")
+}
+
+fn display_agents(agents: &[Agent]) -> Vec<&Agent> {
+    let (mut running, mut ended): (Vec<_>, Vec<_>) =
+        agents.iter().partition(|agent| is_running_agent(agent));
+    ended.sort_by_key(|agent| {
+        std::cmp::Reverse(agent.completed_at.or(agent.started_at).unwrap_or(0))
+    });
+    running.extend(ended.into_iter().take(3));
+    running
 }
 
 fn agent_symbol(status: &str) -> &'static str {
@@ -514,6 +531,9 @@ fn styled_line(line: &str) -> Text {
 }
 
 fn clip(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
     if text.chars().count() <= width {
         text.into()
     } else {
@@ -553,6 +573,32 @@ mod tests {
         assert_eq!(compact_tokens(999), "999");
         assert_eq!(compact_tokens(12_400), "12.4k");
         assert_eq!(compact_tokens(2_300_000), "2.3M");
+        let table_width = 5;
+        assert!(clip("123456", table_width - 1).chars().count() < table_width);
+        assert_eq!(clip("x", 0), "");
         assert!(styled_line("  Goal  ship").serialize() != Text::new("  Goal  ship").serialize());
+    }
+
+    #[test]
+    fn keeps_running_and_three_latest_ended_agents() {
+        let agents = [
+            ("oldest", "completed", Some(1)),
+            ("active", "running", None),
+            ("newest", "completed", Some(4)),
+            ("middle", "failed", Some(3)),
+            ("older", "completed", Some(2)),
+        ]
+        .map(|(name, status, completed_at)| Agent {
+            name: Some(name.into()),
+            status: status.into(),
+            completed_at,
+            ..Default::default()
+        });
+
+        let names: Vec<_> = display_agents(&agents)
+            .into_iter()
+            .filter_map(|agent| agent.name.as_deref())
+            .collect();
+        assert_eq!(names, ["active", "newest", "middle", "older"]);
     }
 }

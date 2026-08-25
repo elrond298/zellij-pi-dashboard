@@ -167,6 +167,8 @@ export default function (pi: ExtensionAPI) {
       ? message.content.filter((part: any) => part?.type === "toolCall").length
       : 0;
   };
+  const isRunningAgent = (agent: AgentDetail) =>
+    agent.status === "running" || agent.status === "background";
   const publish = () => {
     const items = Array.from(todos, ([id, item]) => ({ id, ...item }));
     const pendingCount = items.filter((item) => item.status === "pending").length;
@@ -184,7 +186,16 @@ export default function (pi: ExtensionAPI) {
       : undefined;
     status.progress = items.length ? Math.round((completedCount / items.length) * 100) : undefined;
     status.subagents = Array.from(subagents.values());
-    status.agents = Array.from(agents.values()).slice(-12);
+    const agentItems = Array.from(agents.values());
+    status.agents = [
+      ...agentItems.filter(isRunningAgent),
+      ...agentItems
+        .filter((agent) => !isRunningAgent(agent))
+        .sort(
+          (a, b) => (b.completedAt ?? b.startedAt ?? 0) - (a.completedAt ?? a.startedAt ?? 0),
+        )
+        .slice(0, 3),
+    ];
     status.tools = Array.from(pending, ([id, tool]) => ({
       id,
       ...tool,
@@ -410,7 +421,7 @@ export default function (pi: ExtensionAPI) {
       if (entry.type === "custom" && entry.customType === "subagents:record") {
         const agent = entry.data;
         if (agent?.id) agents.set(agent.id, agent);
-        if (agent?.status === "running" || agent?.status === "background") {
+        if (agent?.id && isRunningAgent(agent)) {
           subagents.set(agent.id, agent.description ?? agent.type ?? agent.id);
         } else if (agent?.id) subagents.delete(agent.id);
       }
