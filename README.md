@@ -2,6 +2,14 @@
 
 A Zellij plugin that aggregates Pi processes in the current Zellij session and shows their goals, todos, progress, active tools, agents, elapsed/busy time, and token usage.
 
+## Install
+
+```sh
+./install.sh
+```
+
+The installer builds the WASM plugin, installs it under `${XDG_DATA_HOME:-~/.local/share}/zellij/plugins/`, links the Pi extension, and adds the `Ctrl o` then uppercase `P` binding when one does not already exist. Restart Pi and Zellij after installation.
+
 ## Install the Pi status extension
 
 The tracked extension is [`extensions/zellij-status.ts`](extensions/zellij-status.ts). Link it into Pi:

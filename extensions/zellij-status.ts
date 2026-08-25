@@ -126,9 +126,17 @@ export default function (pi: ExtensionAPI) {
   let namingController: AbortController | undefined;
   let todoBatchPending = false;
 
-  const formatArgs = (args: any) => {
+  const formatArgs = (name: string, args: any) => {
     try {
-      const text = JSON.stringify(args, (key, value) =>
+      const value =
+        name === "Agent"
+          ? {
+              name: args?.name,
+              subagent_type: args?.subagent_type,
+              description: args?.description,
+            }
+          : args;
+      const text = JSON.stringify(value, (key, value) =>
         /token|secret|password|api.?key/i.test(key) ? "[redacted]" : value,
       );
       return text.length > 500 ? `${text.slice(0, 497)}...` : text;
@@ -177,7 +185,11 @@ export default function (pi: ExtensionAPI) {
     status.progress = items.length ? Math.round((completedCount / items.length) * 100) : undefined;
     status.subagents = Array.from(subagents.values());
     status.agents = Array.from(agents.values()).slice(-12);
-    status.tools = Array.from(pending, ([id, tool]) => ({ id, ...tool, args: formatArgs(tool.args) }));
+    status.tools = Array.from(pending, ([id, tool]) => ({
+      id,
+      ...tool,
+      args: formatArgs(tool.name, tool.args),
+    }));
     status.updatedAt = Date.now();
     const json = JSON.stringify(status);
     writes = writes

@@ -87,6 +87,14 @@ struct Tool {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct AgentArgs {
+    name: Option<String>,
+    subagent_type: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Agent {
     name: Option<String>,
@@ -148,7 +156,7 @@ impl Dashboard {
     fn lines(&self, width: usize, now: u64) -> Vec<String> {
         let busy = self.sessions.iter().filter(|session| session.busy).count();
         let mut lines = vec![format!(
-            "PI DASHBOARD  {} sessions  {} busy  [j/k or arrows: scroll]",
+            "PI DASHBOARD · {} sessions · {} busy · j/k scroll · Esc close",
             self.sessions.len(),
             busy
         )];
@@ -183,7 +191,7 @@ impl Dashboard {
                 session.pid
             ));
             if let Some(cwd) = &session.cwd {
-                lines.push(format!("  cwd  {cwd}"));
+                lines.push(format!("  {cwd}"));
             }
 
             if let Some(todo) = &session.todo {
@@ -195,9 +203,10 @@ impl Dashboard {
                     }
                 });
                 lines.push(format!(
-                    "  [{}] {percent:>3}%  todos: {} done, {} active, {} pending",
+                    "  Todo  [{}] {percent:>3}% · {}/{} done · {} active · {} pending",
                     progress(percent, width.saturating_sub(58).clamp(8, 28)),
                     todo.completed,
+                    todo.total,
                     todo.active,
                     todo.pending
                 ));
@@ -217,47 +226,94 @@ impl Dashboard {
             }
 
             if let Some(goal) = &session.goal {
-                let detail = session.goal_detail.as_ref();
-                let age = detail
-                    .map(|g| elapsed(now.saturating_sub(g.started_at)))
-                    .unwrap_or_default();
-                let stats = detail
-                    .map(|g| {
+                let stats = session
+                    .goal_detail
+                    .as_ref()
+                    .map(|goal| {
                         format!(
-                            " [{} · iter {} · {} tok · recorded {}s]",
-                            g.status, g.iteration, g.tokens_used, g.time_used_seconds
+                            " · {} · {} · iter {} · {} tok · recorded {}s",
+                            elapsed(now.saturating_sub(goal.started_at)),
+                            goal.status,
+                            goal.iteration,
+                            compact_tokens(goal.tokens_used),
+                            goal.time_used_seconds
                         )
                     })
                     .unwrap_or_default();
-                lines.push(format!("  goal {goal}  {age}{stats}"));
+                lines.push(format!("  Goal  {goal}{stats}"));
             }
 
-            for tool in &session.tools {
+            let active_agents: Vec<_> = session
+                .tools
+                .iter()
+                .filter(|tool| tool.name == "Agent")
+                .collect();
+            let legacy_agent = session.tools.is_empty() && session.tool.as_deref() == Some("Agent");
+            let agent_count =
+                active_agents.len() + session.agents.len() + usize::from(legacy_agent);
+            if agent_count > 0 {
+                lines.push(format!("  Agents ({agent_count})"));
+            }
+            for tool in active_agents {
+                let args = tool
+                    .args
+                    .as_deref()
+                    .and_then(|args| serde_json::from_str::<AgentArgs>(args).ok())
+                    .unwrap_or_default();
                 let age = elapsed(now.saturating_sub(tool.started_at));
                 lines.push(format!(
-                    "  tool {}  {age}  {}",
+                    "    ● {}",
+                    agent_summary(
+                        args.name.as_deref(),
+                        args.subagent_type.as_deref(),
+                        &format!("launching {age}"),
+                    )
+                ));
+                if let Some(description) = args.description {
+                    lines.push(format!("      {description}"));
+                }
+            }
+            if legacy_agent {
+                lines.push("    ● Agent · running".into());
+            }
+            for agent in &session.agents {
+                let age = agent
+                    .started_at
+                    .map(|time| elapsed(now.saturating_sub(time)))
+                    .unwrap_or_default();
+                let status = match agent.status.as_str() {
+                    "background" => "running",
+                    status => status,
+                };
+                let state = if age.is_empty() {
+                    status.into()
+                } else {
+                    format!("{status} {age}")
+                };
+                lines.push(format!(
+                    "    {} {}",
+                    agent_symbol(status),
+                    agent_summary(agent.name.as_deref(), agent.r#type.as_deref(), &state)
+                ));
+                if let Some(description) = &agent.description {
+                    lines.push(format!("      {description}"));
+                }
+            }
+
+            for tool in session.tools.iter().filter(|tool| tool.name != "Agent") {
+                let age = elapsed(now.saturating_sub(tool.started_at));
+                lines.push(format!(
+                    "  Tool  {} · {age} · {}",
                     tool.name,
                     tool.args.as_deref().unwrap_or("")
                 ));
             }
             if session.tools.is_empty() {
                 if let Some(tool) = &session.tool {
-                    lines.push(format!("  tool {tool}"));
+                    if tool != "Agent" {
+                        lines.push(format!("  Tool  {tool}"));
+                    }
                 }
-            }
-
-            for agent in &session.agents {
-                let label = agent
-                    .name
-                    .as_deref()
-                    .or(agent.description.as_deref())
-                    .or(agent.r#type.as_deref())
-                    .unwrap_or("agent");
-                let age = agent
-                    .started_at
-                    .map(|time| elapsed(now.saturating_sub(time)))
-                    .unwrap_or_default();
-                lines.push(format!("  agent {}  {}  {age}", agent.status, label));
             }
 
             if let Some(tokens) = &session.tokens {
@@ -275,10 +331,16 @@ impl Dashboard {
                     .map(|level| format!(" · think {level}"))
                     .unwrap_or_default();
                 lines.push(format!(
-                    "  usage {} tok (in {} · out {} · cache r{} w{}) · {} calls · ${:.4} · elapsed {} · busy {}{}",
-                    tokens.total, tokens.input, tokens.output, tokens.cache_read, tokens.cache_write,
-                    tokens.tool_calls, tokens.cost, elapsed(now.saturating_sub(session.started_at)),
-                    elapsed(session.busy_ms + active_ms), thinking
+                    "  Usage  {} tok · in {} · out {} · cache {} · {} calls · ${:.4} · elapsed {} · busy {}{}",
+                    compact_tokens(tokens.total),
+                    compact_tokens(tokens.input),
+                    compact_tokens(tokens.output),
+                    compact_tokens(tokens.cache_read.saturating_add(tokens.cache_write)),
+                    tokens.tool_calls,
+                    tokens.cost,
+                    elapsed(now.saturating_sub(session.started_at)),
+                    elapsed(session.busy_ms + active_ms),
+                    thinking
                 ));
             }
         }
@@ -352,9 +414,32 @@ impl ZellijPlugin for Dashboard {
             .iter()
             .skip(self.scroll)
             .take(rows)
-            .map(|line| styled_line(&clip(line, cols)))
-            .collect();
-        print_nested_list_with_coordinates(visible, 0, 0, Some(cols), Some(rows));
+            .fold(Table::new(), |table, line| {
+                table.add_styled_row(vec![styled_line(&clip(line, cols))])
+            });
+        print_table_with_coordinates(visible, 0, 0, Some(cols), Some(rows));
+    }
+}
+
+fn agent_summary(name: Option<&str>, agent_type: Option<&str>, state: &str) -> String {
+    let mut parts: Vec<_> = [name, agent_type]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        parts.push("Agent");
+    }
+    parts.push(state);
+    parts.join(" · ")
+}
+
+fn agent_symbol(status: &str) -> &'static str {
+    match status {
+        "running" => "●",
+        "completed" => "✓",
+        "failed" | "error" => "✗",
+        _ => "○",
     }
 }
 
@@ -379,8 +464,27 @@ fn elapsed(ms: u64) -> String {
     }
 }
 
-fn styled_line(line: &str) -> NestedListItem {
-    let text = NestedListItem::new(line);
+fn compact_tokens(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    if tokens < 999_950 {
+        return compact_unit(tokens, 1_000, "k");
+    }
+    compact_unit(tokens, 1_000_000, "M")
+}
+
+fn compact_unit(value: u64, divisor: u64, suffix: &str) -> String {
+    let tenths = ((value as u128 * 10 + divisor as u128 / 2) / divisor as u128) as u64;
+    if tenths % 10 == 0 {
+        format!("{}{suffix}", tenths / 10)
+    } else {
+        format!("{}.{:01}{suffix}", tenths / 10, tenths % 10)
+    }
+}
+
+fn styled_line(line: &str) -> Text {
+    let text = Text::new(line);
     let content = line.trim_start();
     if line.starts_with("PI DASHBOARD") {
         text.color_all(0)
@@ -390,14 +494,20 @@ fn styled_line(line: &str) -> NestedListItem {
         text.color_substring(1, "● BUSY")
     } else if content.starts_with("○ IDLE") {
         text.success_color_substring("○ IDLE")
-    } else if content.starts_with('[') || content.starts_with("agent ") {
+    } else if content.starts_with("Todo") || content.starts_with("Agents") {
         text.color_all(0)
-    } else if content.starts_with("goal ") {
+    } else if content.starts_with("Goal") {
         text.color_all(3)
-    } else if content.starts_with("tool ") || content.starts_with('▶') {
+    } else if content.starts_with("Tool") || content.starts_with('▶') {
         text.color_all(2)
+    } else if content.starts_with('●') {
+        text.color_substring(2, "●")
     } else if content.starts_with('✓') {
         text.success_color_all()
+    } else if content.starts_with('✗') {
+        text.error_color_all()
+    } else if line.starts_with('─') || content.starts_with("Usage") {
+        text.dim_all()
     } else {
         text
     }
@@ -422,7 +532,7 @@ mod tests {
 
     #[test]
     fn parses_and_renders_session_details() {
-        let json = r#"{"pid":42,"busy":true,"model":"gpt","goal":"ship","progress":50,"todo":{"total":2,"pending":1,"active":0,"completed":1,"items":[{"id":"1","status":"completed","text":"inspect"},{"id":"2","status":"pending","text":"build"}]},"tools":[{"name":"cargo","args":"{\"test\":true}","startedAt":900}],"agents":[{"name":"reviewer","status":"background","startedAt":800}],"tokens":{"input":10,"output":5,"total":15,"cost":0.01,"toolCalls":1},"startedAt":0,"updatedAt":1000}"#;
+        let json = r#"{"pid":42,"busy":true,"model":"gpt","goal":"ship","progress":50,"todo":{"total":2,"pending":1,"active":0,"completed":1,"items":[{"id":"1","status":"completed","text":"inspect"},{"id":"2","status":"pending","text":"build"}]},"tools":[{"name":"cargo","args":"{\"test\":true}","startedAt":900},{"name":"Agent","args":"{\"name\":\"audit\",\"subagent_type\":\"code-reviewer\",\"description\":\"Review rendering\"}","startedAt":900}],"agents":[{"name":"reviewer","type":"Explore","description":"Locate APIs","status":"background","startedAt":800}],"tokens":{"input":1000,"output":234567,"cacheRead":999000,"total":1234567,"cost":0.01,"toolCalls":2},"startedAt":0,"updatedAt":1000}"#;
         let session: Session = serde_json::from_str(json).unwrap();
         let dashboard = Dashboard {
             sessions: vec![session],
@@ -430,16 +540,19 @@ mod tests {
             ..Default::default()
         };
         let rendered = dashboard.lines(100, 1_000).join("\n");
-        assert!(
-            rendered.contains("50%")
-                && rendered.contains("goal ship")
-                && rendered.contains("tool cargo")
-                && rendered.contains("agent background")
-                && rendered.contains("15 tok")
-        );
-        assert!(
-            styled_line("  goal ship").serialize()
-                != NestedListItem::new("  goal ship").serialize()
-        );
+        assert!(rendered.contains("50%"));
+        assert!(rendered.contains("Goal  ship"));
+        assert!(rendered.contains("Tool  cargo"));
+        assert!(rendered.contains("Agents (2)"));
+        assert!(rendered.contains("audit · code-reviewer · launching 0s"));
+        assert!(rendered.contains("Review rendering"));
+        assert!(rendered.contains("reviewer · Explore · running 0s"));
+        assert!(!rendered.contains("subagent_type"));
+        assert!(rendered.contains("1.2M tok · in 1k · out 234.6k · cache 999k"));
+        assert!(rendered.lines().all(|line| !line.starts_with('>')));
+        assert_eq!(compact_tokens(999), "999");
+        assert_eq!(compact_tokens(12_400), "12.4k");
+        assert_eq!(compact_tokens(2_300_000), "2.3M");
+        assert!(styled_line("  Goal  ship").serialize() != Text::new("  Goal  ship").serialize());
     }
 }
