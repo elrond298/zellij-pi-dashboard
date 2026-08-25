@@ -8,7 +8,7 @@ A Zellij plugin that aggregates Pi processes in the current Zellij session and s
 ./install.sh
 ```
 
-The installer builds the WASM plugin, installs it under `${XDG_DATA_HOME:-~/.local/share}/zellij/plugins/`, links the Pi extension, and adds the `Ctrl o` then uppercase `P` binding when one does not already exist. Restart Pi and Zellij after installation.
+The installer builds the WASM plugin, installs it under `${XDG_CONFIG_HOME:-~/.config}/zellij/plugins/`, links the Pi extension, and adds the `Ctrl o` then uppercase `P` binding when one does not already exist. Restart Pi and Zellij after installation.
 
 ## Install the Pi status extension
 

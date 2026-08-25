@@ -3,10 +3,9 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 config_home=${XDG_CONFIG_HOME:-"$HOME/.config"}
-data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
 pi_home=${PI_AGENT_DIR:-"$HOME/.pi/agent"}
 config="$config_home/zellij/config.kdl"
-plugin="$data_home/zellij/plugins/zellij-pi-dashboard.wasm"
+plugin="$config_home/zellij/plugins/zellij-pi-dashboard.wasm"
 extension="$pi_home/extensions/zellij-status.ts"
 marker="// zellij-pi-dashboard"
 

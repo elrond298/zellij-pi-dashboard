@@ -23,6 +23,8 @@ install_case() {
 install_case empty </dev/null
 [ "$(grep -c '^keybinds' "$tmp/empty/.config/zellij/config.kdl")" -eq 1 ]
 grep -q 'zellij-pi-dashboard.wasm' "$tmp/empty/.config/zellij/config.kdl"
+[ -f "$tmp/empty/.config/zellij/plugins/zellij-pi-dashboard.wasm" ]
+[ ! -e "$tmp/empty/.local/share/zellij/plugins/zellij-pi-dashboard.wasm" ]
 
 install_case existing <<'EOF'
 keybinds clear-defaults=true {
