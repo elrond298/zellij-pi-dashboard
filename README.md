@@ -75,4 +75,4 @@ type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: nu
 
 `zjstatus/examples/pi-status.sh` consumes this layout and schema unchanged.
 
-Use `j`/`k`, arrow keys, or `g` to scroll. Run `cargo test` for the parser/rendering check.
+Use `Tab` to jump to the next Pi instance; use `j`/`k`, arrow keys, the mouse wheel, or `g` to scroll. Run `cargo test` for the parser/rendering check.

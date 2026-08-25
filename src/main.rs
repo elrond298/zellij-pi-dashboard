@@ -24,6 +24,7 @@ struct Dashboard {
     session_name: Option<String>,
     loading: bool,
     scroll: usize,
+    instance_offsets: Vec<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -119,6 +120,18 @@ struct Tokens {
 }
 
 impl Dashboard {
+    fn next_instance(&mut self) {
+        if let Some(offset) = self
+            .instance_offsets
+            .iter()
+            .copied()
+            .find(|offset| *offset > self.scroll)
+            .or_else(|| self.instance_offsets.first().copied())
+        {
+            self.scroll = offset;
+        }
+    }
+
     fn refresh(&mut self) {
         if self.granted && !self.loading && self.session_name.is_some() {
             self.loading = true;
@@ -158,7 +171,7 @@ impl Dashboard {
     fn lines(&self, width: usize, now: u64) -> Vec<String> {
         let busy = self.sessions.iter().filter(|session| session.busy).count();
         let mut lines = vec![format!(
-            "PI DASHBOARD · {} sessions · {} busy · j/k scroll · Esc close",
+            "PI DASHBOARD · {} sessions · {} busy · Tab instances · j/k scroll · Esc close",
             self.sessions.len(),
             busy
         )];
@@ -405,6 +418,7 @@ impl ZellijPlugin for Dashboard {
             }
             Event::Key(key) if key.has_no_modifiers() => {
                 match key.bare_key {
+                    BareKey::Tab => self.next_instance(),
                     BareKey::Esc => close_focus(),
                     BareKey::Down | BareKey::Char('j') => self.scroll += 1,
                     BareKey::Up | BareKey::Char('k') => self.scroll = self.scroll.saturating_sub(1),
@@ -420,12 +434,20 @@ impl ZellijPlugin for Dashboard {
     fn render(&mut self, rows: usize, cols: usize) {
         // Zellij's table renderer reserves one column for padding.
         let table_width = cols.saturating_sub(1);
-        let lines: Vec<_> = self
-            .lines(table_width, now_ms())
-            .into_iter()
-            .flat_map(|line| styled_wrapped_line(&line, table_width))
-            .collect();
+        let mut lines = Vec::new();
+        let mut instance_offsets = Vec::new();
+        for line in self.lines(table_width, now_ms()) {
+            if line.starts_with('─') {
+                instance_offsets.push(lines.len());
+            }
+            lines.extend(styled_wrapped_line(&line, table_width));
+        }
         let max_scroll = lines.len().saturating_sub(rows);
+        for offset in &mut instance_offsets {
+            *offset = (*offset).min(max_scroll);
+        }
+        instance_offsets.dedup();
+        self.instance_offsets = instance_offsets;
         self.scroll = self.scroll.min(max_scroll);
         let visible = lines
             .iter()
@@ -616,6 +638,12 @@ mod tests {
         assert_eq!(dashboard.scroll, 4);
         assert!(dashboard.update(Event::Mouse(Mouse::ScrollUp(2))));
         assert_eq!(dashboard.scroll, 2);
+        dashboard.scroll = 0;
+        dashboard.instance_offsets = vec![2, 10, 15];
+        for expected in [2, 10, 15, 2] {
+            assert!(dashboard.update(Event::Key(KeyWithModifier::new(BareKey::Tab))));
+            assert_eq!(dashboard.scroll, expected);
+        }
         let styled = styled_wrapped_line("  Goal  abcdef", 8);
         assert_eq!(styled.len(), 2);
         assert_ne!(styled[1].serialize(), Text::new("abcdef").serialize());
