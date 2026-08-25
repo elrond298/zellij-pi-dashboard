@@ -35,6 +35,9 @@ struct Session {
     session_name: Option<String>,
     instance_name: Option<String>,
     cwd: Option<String>,
+    workspace: Option<Workspace>,
+    mode: Option<String>,
+    context_usage: Option<ContextStats>,
     model: Option<String>,
     thinking: Option<String>,
     busy: bool,
@@ -105,6 +108,23 @@ struct Agent {
     status: String,
     started_at: Option<u64>,
     completed_at: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ContextStats {
+    tokens: Option<u64>,
+    context_window: u64,
+    percent: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Workspace {
+    vcs: String,
+    root: String,
+    name: Option<String>,
+    worktree: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -190,6 +210,11 @@ impl Dashboard {
         for session in &self.sessions {
             lines.push("─".repeat(width.min(100)));
             let state = if session.busy { "● BUSY" } else { "○ IDLE" };
+            let mode = if session.mode.as_deref() == Some("plan") {
+                " [PLAN]"
+            } else {
+                ""
+            };
             let name = session
                 .session_name
                 .as_deref()
@@ -202,11 +227,29 @@ impl Dashboard {
                 .map(|id| format!(" pane:{id}"))
                 .unwrap_or_default();
             lines.push(format!(
-                "{state}  {name}{pane}  {model}  pid:{}",
+                "{state}{mode}  {name}{pane}  {model}  pid:{}",
                 session.pid
             ));
             if let Some(cwd) = &session.cwd {
-                lines.push(format!("  {cwd}"));
+                lines.push(format!("  Project  {cwd}"));
+            }
+            if let Some(workspace) = &session.workspace {
+                let kind = if workspace.vcs == "git" && workspace.worktree {
+                    "git worktree"
+                } else {
+                    workspace.vcs.as_str()
+                };
+                let name = workspace
+                    .name
+                    .as_deref()
+                    .map(|name| format!(":{name}"))
+                    .unwrap_or_default();
+                let root = if session.cwd.as_deref() == Some(workspace.root.as_str()) {
+                    String::new()
+                } else {
+                    format!(" · {}", workspace.root)
+                };
+                lines.push(format!("  Workspace  {kind}{name}{root}"));
             }
 
             if let Some(todo) = &session.todo {
@@ -356,6 +399,26 @@ impl Dashboard {
                     elapsed(now.saturating_sub(session.started_at)),
                     elapsed(session.busy_ms + active_ms),
                     thinking
+                ));
+            }
+            if let Some(context) = &session.context_usage {
+                let used = context
+                    .tokens
+                    .map(compact_tokens)
+                    .unwrap_or_else(|| "?".into());
+                let percent = context
+                    .percent
+                    .or_else(|| {
+                        context
+                            .tokens
+                            .filter(|_| context.context_window > 0)
+                            .map(|tokens| tokens as f64 * 100.0 / context.context_window as f64)
+                    })
+                    .map(|percent| format!(" · {percent:.0}%"))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "  Context  {used} / {}{percent}",
+                    compact_tokens(context.context_window)
                 ));
             }
         }
@@ -559,7 +622,10 @@ fn styled_line_as(line: &str, source: &str) -> Text {
         text.success_color_all()
     } else if content.starts_with('✗') {
         text.error_color_all()
-    } else if source.starts_with('─') || content.starts_with("Usage") {
+    } else if source.starts_with('─')
+        || content.starts_with("Usage")
+        || content.starts_with("Context")
+    {
         text.dim_all()
     } else {
         text
@@ -647,6 +713,25 @@ mod tests {
         let styled = styled_wrapped_line("  Goal  abcdef", 8);
         assert_eq!(styled.len(), 2);
         assert_ne!(styled[1].serialize(), Text::new("abcdef").serialize());
+    }
+
+    #[test]
+    fn renders_context_workspace_and_plan_mode() {
+        let sessions: Vec<Session> = serde_json::from_str(
+            r#"[{"pid":1,"busy":true,"cwd":"/tmp/project","mode":"plan","workspace":{"vcs":"jj","root":"/tmp/project","name":"feature"},"contextUsage":{"tokens":85300,"contextWindow":200000,"percent":42.65}},{"pid":2,"cwd":"/tmp/worktree/src","workspace":{"vcs":"git","root":"/tmp/worktree","name":"topic","worktree":true}}]"#,
+        )
+        .unwrap();
+        let dashboard = Dashboard {
+            sessions,
+            granted: true,
+            ..Default::default()
+        };
+        let rendered = dashboard.lines(120, 1_000).join("\n");
+        assert!(rendered.contains("● BUSY [PLAN]"));
+        assert!(rendered.contains("Project  /tmp/project"));
+        assert!(rendered.contains("Workspace  jj:feature"));
+        assert!(rendered.contains("Workspace  git worktree:topic · /tmp/worktree"));
+        assert!(rendered.contains("Context  85.3k / 200k · 43%"));
     }
 
     #[test]

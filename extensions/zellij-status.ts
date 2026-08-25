@@ -59,6 +59,19 @@ interface TokenStats {
   toolCalls: number;
 }
 
+interface ContextStats {
+  tokens?: number;
+  contextWindow: number;
+  percent?: number;
+}
+
+interface WorkspaceInfo {
+  vcs: "git" | "jj";
+  root: string;
+  name?: string;
+  worktree?: boolean;
+}
+
 interface Status {
   version: 2;
   pid: number;
@@ -67,6 +80,9 @@ interface Status {
   sessionName?: string;
   instanceName?: string;
   cwd?: string;
+  workspace?: WorkspaceInfo;
+  mode?: "normal" | "plan";
+  contextUsage?: ContextStats;
   model?: string;
   thinking?: string;
   busy: boolean;
@@ -122,6 +138,8 @@ export default function (pi: ExtensionAPI) {
     updatedAt: startedAt,
   };
   let writes = Promise.resolve();
+  let workspaceGeneration = 0;
+  let workspaceDetection = Promise.resolve();
   let pendingNamePrompt: string | undefined;
   let namingController: AbortController | undefined;
   let todoBatchPending = false;
@@ -169,6 +187,92 @@ export default function (pi: ExtensionAPI) {
   };
   const isRunningAgent = (agent: AgentDetail) =>
     agent.status === "running" || agent.status === "background";
+  const syncContext = (ctx: ExtensionContext) => {
+    status.cwd = ctx.cwd;
+    status.model = ctx.model?.id;
+    status.thinking = ctx.thinkingLevel;
+    const usage = ctx.getContextUsage();
+    status.contextUsage = usage
+      ? {
+          tokens: usage.tokens ?? undefined,
+          contextWindow: usage.contextWindow,
+          percent: usage.percent ?? undefined,
+        }
+      : undefined;
+  };
+  const applyMode = (value: any) => {
+    const message = value?.message ?? value;
+    if (message?.customType !== "plan-mode-transition") return;
+    const { mode, version } = message.details ?? {};
+    if (mode !== "plan" && mode !== "normal") return;
+    const marker = `[PI PLAN MODE CONTRACT v1: ${mode.toUpperCase()}]\n`;
+    if (version === 1 && typeof message.content === "string" && message.content.startsWith(marker)) {
+      status.mode = mode;
+    }
+  };
+  const detectWorkspace = async (cwd: string): Promise<WorkspaceInfo | undefined> => {
+    try {
+      const rootResult = await pi.exec("jj", ["--ignore-working-copy", "workspace", "root"], {
+        cwd,
+        timeout: 1500,
+      });
+      if (rootResult.code === 0 && rootResult.stdout.trim()) {
+        const root = rootResult.stdout.trim();
+        let name: string | undefined;
+        try {
+          const list = await pi.exec(
+            "jj",
+            [
+              "--ignore-working-copy",
+              "workspace",
+              "list",
+              "-T",
+              'name ++ "\\t" ++ root ++ "\\n"',
+            ],
+            { cwd, timeout: 1500 },
+          );
+          name = list.stdout
+            .trimEnd()
+            .split("\n")
+            .map((line) => line.split("\t"))
+            .find(([, path]) => path === root)?.[0];
+        } catch {}
+        return { vcs: "jj", root, name };
+      }
+    } catch {}
+    try {
+      const result = await pi.exec(
+        "git",
+        [
+          "rev-parse",
+          "--path-format=absolute",
+          "--show-toplevel",
+          "--git-dir",
+          "--git-common-dir",
+        ],
+        { cwd, timeout: 1500 },
+      );
+      if (result.code !== 0) return undefined;
+      const [root, gitDir, commonDir] = result.stdout.trimEnd().split("\n");
+      if (!root || !gitDir || !commonDir) return undefined;
+      let name: string | undefined;
+      try {
+        const branch = await pi.exec(
+          "git",
+          ["symbolic-ref", "--quiet", "--short", "HEAD"],
+          { cwd, timeout: 1500 },
+        );
+        if (branch.code === 0) name = branch.stdout.trim() || undefined;
+      } catch {}
+      return {
+        vcs: "git",
+        root,
+        name,
+        worktree: gitDir !== commonDir,
+      };
+    } catch {}
+    return undefined;
+  };
   const publish = () => {
     const items = Array.from(todos, ([id, item]) => ({ id, ...item }));
     const pendingCount = items.filter((item) => item.status === "pending").length;
@@ -389,11 +493,13 @@ export default function (pi: ExtensionAPI) {
   };
 
   const restore = (ctx: ExtensionContext) => {
+    syncContext(ctx);
     todos.clear();
     todoBatchPending = false;
     subagents.clear();
     agents.clear();
     status.instanceName = undefined;
+    status.mode = undefined;
     status.goal = undefined;
     status.goalDetail = undefined;
     status.tokens = undefined;
@@ -405,6 +511,7 @@ export default function (pi: ExtensionAPI) {
     );
     const todoCalls = new Map<string, { name: string; args: any }>();
     for (const entry of branch) {
+      applyMode(entry);
       if (
         entry.type === "custom" &&
         entry.customType === INSTANCE_NAME_ENTRY &&
@@ -478,14 +585,18 @@ export default function (pi: ExtensionAPI) {
     namingController?.abort();
     namingController = undefined;
     pendingNamePrompt = undefined;
+    const generation = ++workspaceGeneration;
+    status.workspace = undefined;
     restore(ctx);
     status.sessionId = ctx.sessionManager.getSessionId();
     status.sessionName = pi.getSessionName();
-    status.cwd = ctx.cwd;
-    status.model = ctx.model?.id;
-    status.thinking = ctx.thinkingLevel;
     status.busy = !ctx.isIdle();
     publish();
+    workspaceDetection = detectWorkspace(ctx.cwd).then((workspace) => {
+      if (generation !== workspaceGeneration) return;
+      status.workspace = workspace;
+      publish();
+    });
   });
 
   pi.on("session_info_changed", (event) => {
@@ -512,8 +623,14 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("model_select", (event, ctx) => {
+    syncContext(ctx);
     status.model = event.model.id;
     status.thinking = ctx.thinkingLevel;
+    publish();
+  });
+
+  pi.on("session_compact", (_event, ctx) => {
+    syncContext(ctx);
     publish();
   });
 
@@ -529,6 +646,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    syncContext(ctx);
     status.busy = false;
     if (status.activityStartedAt) status.busyMs += Date.now() - status.activityStartedAt;
     status.activityStartedAt = undefined;
@@ -581,6 +699,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("message_start", (event) => {
     const message = event.message as any;
+    applyMode(message);
     const text = readText(message);
     const objective = text.match(/<goal_objective>\s*([\s\S]*?)\s*<\/goal_objective>/)?.[1];
     if (objective) status.goal = objective.trim();
@@ -602,14 +721,17 @@ export default function (pi: ExtensionAPI) {
     publish();
   });
 
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     addUsage(event.message);
+    syncContext(ctx);
     publish();
   });
 
   pi.on("session_shutdown", async () => {
     namingController?.abort();
     pendingNamePrompt = undefined;
+    workspaceGeneration += 1;
+    await workspaceDetection;
     await writes;
     await Promise.allSettled([unlink(file), unlink(temp)]);
   });
