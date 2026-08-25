@@ -357,6 +357,7 @@ impl ZellijPlugin for Dashboard {
             EventType::RunCommandResult,
             EventType::ModeUpdate,
             EventType::Key,
+            EventType::Mouse,
         ]);
         self.granted = true;
         request_permission(&[
@@ -394,6 +395,14 @@ impl ZellijPlugin for Dashboard {
                 self.accept(stdout, stderr, code);
                 true
             }
+            Event::Mouse(Mouse::ScrollDown(lines)) => {
+                self.scroll = self.scroll.saturating_add(lines.max(1));
+                true
+            }
+            Event::Mouse(Mouse::ScrollUp(lines)) => {
+                self.scroll = self.scroll.saturating_sub(lines.max(1));
+                true
+            }
             Event::Key(key) if key.has_no_modifiers() => {
                 match key.bare_key {
                     BareKey::Esc => close_focus(),
@@ -414,7 +423,7 @@ impl ZellijPlugin for Dashboard {
         let lines: Vec<_> = self
             .lines(table_width, now_ms())
             .into_iter()
-            .flat_map(|line| wrap_line(&line, table_width))
+            .flat_map(|line| styled_wrapped_line(&line, table_width))
             .collect();
         let max_scroll = lines.len().saturating_sub(rows);
         self.scroll = self.scroll.min(max_scroll);
@@ -423,7 +432,7 @@ impl ZellijPlugin for Dashboard {
             .skip(self.scroll)
             .take(rows)
             .fold(Table::new(), |table, line| {
-                table.add_styled_row(vec![styled_line(line)])
+                table.add_styled_row(vec![line.clone()])
             });
         print_table_with_coordinates(visible, 0, 0, Some(cols), Some(rows));
     }
@@ -505,12 +514,12 @@ fn compact_unit(value: u64, divisor: u64, suffix: &str) -> String {
     }
 }
 
-fn styled_line(line: &str) -> Text {
+fn styled_line_as(line: &str, source: &str) -> Text {
     let text = Text::new(line);
-    let content = line.trim_start();
-    if line.starts_with("PI DASHBOARD") {
+    let content = source.trim_start();
+    if source.starts_with("PI DASHBOARD") {
         text.color_all(0)
-    } else if line.starts_with('!') {
+    } else if source.starts_with('!') {
         text.error_color_all()
     } else if content.starts_with("● BUSY") {
         text.color_substring(1, "● BUSY")
@@ -528,7 +537,7 @@ fn styled_line(line: &str) -> Text {
         text.success_color_all()
     } else if content.starts_with('✗') {
         text.error_color_all()
-    } else if line.starts_with('─') || content.starts_with("Usage") {
+    } else if source.starts_with('─') || content.starts_with("Usage") {
         text.dim_all()
     } else {
         text
@@ -554,6 +563,13 @@ fn wrap_line(text: &str, width: usize) -> Vec<String> {
     }
     wrapped.push(line);
     wrapped
+}
+
+fn styled_wrapped_line(text: &str, width: usize) -> Vec<Text> {
+    wrap_line(text, width)
+        .into_iter()
+        .map(|line| styled_line_as(&line, text))
+        .collect()
 }
 
 register_plugin!(Dashboard);
@@ -596,7 +612,13 @@ mod tests {
         let mut dashboard = Dashboard::default();
         assert!(dashboard.update(Event::Key(KeyWithModifier::new(BareKey::Char('j')))));
         assert_eq!(dashboard.scroll, 1);
-        assert!(styled_line("  Goal  ship").serialize() != Text::new("  Goal  ship").serialize());
+        assert!(dashboard.update(Event::Mouse(Mouse::ScrollDown(3))));
+        assert_eq!(dashboard.scroll, 4);
+        assert!(dashboard.update(Event::Mouse(Mouse::ScrollUp(2))));
+        assert_eq!(dashboard.scroll, 2);
+        let styled = styled_wrapped_line("  Goal  abcdef", 8);
+        assert_eq!(styled.len(), 2);
+        assert_ne!(styled[1].serialize(), Text::new("abcdef").serialize());
     }
 
     #[test]
