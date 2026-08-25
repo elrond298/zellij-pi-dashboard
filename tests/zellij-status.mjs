@@ -183,12 +183,10 @@ try {
   handlers.get("before_agent_start")({}, ctx);
   await waitForCompletions(5);
   assert.equal(completions[3].options.signal.aborted, true, "restore must cancel the stale goal");
-  handlers.get("tool_execution_end")({
-    toolCallId: "goal-complete",
-    toolName: "goal_complete",
-    isError: false,
-    result: {},
-  });
+  handlers.get("message_end")(
+    { message: { role: "toolResult", toolName: "goal_complete", isError: false } },
+    ctx,
+  );
   resolveDeferred({ stopReason: "stop", content: [{ type: "text", text: "stale summary" }] });
   const completed = await waitFor((status) => status.goal === undefined);
   assert.equal(completed.goal, undefined);

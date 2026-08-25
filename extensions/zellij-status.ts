@@ -612,6 +612,13 @@ export default function (pi: ExtensionAPI) {
     goalController?.abort();
     goalController = undefined;
   };
+  const clearGoal = () => {
+    cancelGoalSummary();
+    activeGoalText = undefined;
+    goalSummary = undefined;
+    status.goal = undefined;
+    status.goalDetail = undefined;
+  };
 
   const startGoalSummary = (goal: string, ctx: ExtensionContext) => {
     if (displayWidth(goal) <= 48 || goalController || goalSummary?.goalKey === goalKey(goal)) return;
@@ -844,11 +851,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     if (!event.isError && event.toolName === "goal_complete") {
-      cancelGoalSummary();
-      activeGoalText = undefined;
-      goalSummary = undefined;
-      status.goal = undefined;
-      status.goalDetail = undefined;
+      clearGoal();
     }
     publish();
   });
@@ -889,7 +892,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("message_end", (event, ctx) => {
-    addUsage(event.message);
+    const message = event.message as any;
+    if (message?.role === "toolResult" && message.toolName === "goal_complete" && !message.isError) {
+      clearGoal();
+    }
+    addUsage(message);
     syncContext(ctx);
     publish();
   });
