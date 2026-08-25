@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use unicode_width::UnicodeWidthChar;
 use zellij_tile::prelude::*;
 
 const READ_STATUSES: &str = r#"
@@ -408,17 +409,21 @@ impl ZellijPlugin for Dashboard {
     }
 
     fn render(&mut self, rows: usize, cols: usize) {
-        let lines = self.lines(cols, now_ms());
-        let max_scroll = lines.len().saturating_sub(rows);
-        self.scroll = self.scroll.min(max_scroll);
         // Zellij's table renderer reserves one column for padding.
         let table_width = cols.saturating_sub(1);
+        let lines: Vec<_> = self
+            .lines(table_width, now_ms())
+            .into_iter()
+            .flat_map(|line| wrap_line(&line, table_width))
+            .collect();
+        let max_scroll = lines.len().saturating_sub(rows);
+        self.scroll = self.scroll.min(max_scroll);
         let visible = lines
             .iter()
             .skip(self.scroll)
             .take(rows)
             .fold(Table::new(), |table, line| {
-                table.add_styled_row(vec![styled_line(&clip(line, table_width))])
+                table.add_styled_row(vec![styled_line(line)])
             });
         print_table_with_coordinates(visible, 0, 0, Some(cols), Some(rows));
     }
@@ -530,18 +535,25 @@ fn styled_line(line: &str) -> Text {
     }
 }
 
-fn clip(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
+fn wrap_line(text: &str, width: usize) -> Vec<String> {
+    if width == 0 || text.is_empty() {
+        return vec![String::new()];
     }
-    if text.chars().count() <= width {
-        text.into()
-    } else {
-        text.chars()
-            .take(width.saturating_sub(1))
-            .collect::<String>()
-            + "…"
+    let mut wrapped = Vec::new();
+    let mut line = String::new();
+    let mut line_width = 0;
+    for character in text.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if line_width + character_width > width && !line.is_empty() {
+            wrapped.push(line);
+            line = String::new();
+            line_width = 0;
+        }
+        line.push(character);
+        line_width += character_width;
     }
+    wrapped.push(line);
+    wrapped
 }
 
 register_plugin!(Dashboard);
@@ -573,9 +585,17 @@ mod tests {
         assert_eq!(compact_tokens(999), "999");
         assert_eq!(compact_tokens(12_400), "12.4k");
         assert_eq!(compact_tokens(2_300_000), "2.3M");
-        let table_width = 5;
-        assert!(clip("123456", table_width - 1).chars().count() < table_width);
-        assert_eq!(clip("x", 0), "");
+        let wrapped: Vec<_> = ["123456", "ab"]
+            .into_iter()
+            .flat_map(|line| wrap_line(line, 4))
+            .collect();
+        assert_eq!(wrapped, ["1234", "56", "ab"]);
+        assert_eq!(wrapped.len().saturating_sub(2), 1);
+        assert_eq!(wrap_line("你好x", 4), ["你好", "x"]);
+        assert_eq!(wrap_line("x", 0), [""]);
+        let mut dashboard = Dashboard::default();
+        assert!(dashboard.update(Event::Key(KeyWithModifier::new(BareKey::Char('j')))));
+        assert_eq!(dashboard.scroll, 1);
         assert!(styled_line("  Goal  ship").serialize() != Text::new("  Goal  ship").serialize());
     }
 
