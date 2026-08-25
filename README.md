@@ -16,10 +16,27 @@ Restart running Pi processes after changing the extension.
 
 ```sh
 cargo build --release --target wasm32-wasip1
-zellij action start-or-reload-plugin "file:$PWD/target/wasm32-wasip1/release/zellij-pi-dashboard.wasm"
+zellij plugin --floating --x 5% --y 10% --width 90% --height 80% -- \
+  "file:$PWD/target/wasm32-wasip1/release/zellij-pi-dashboard.wasm"
 ```
 
-On first launch, manually approve `RunCommands` and `ReadApplicationState`. The plugin uses them once per second to locate and read the private JSON status files written under `${XDG_RUNTIME_DIR:-/tmp}/pi-zellij-status-$UID/`.
+## Key binding
+
+Add this inside the `session { ... }` block under `keybinds` in `~/.config/zellij/config.kdl`. Replace the plugin path with the absolute path to this repository:
+
+```kdl
+bind "P" {
+    LaunchOrFocusPlugin "file:/absolute/path/to/zellij-pi-dashboard/target/wasm32-wasip1/release/zellij-pi-dashboard.wasm" {
+        floating true
+        move_to_focused_tab true
+    }
+    SwitchToMode "normal"
+}
+```
+
+The active Zellij config binds `Ctrl o`, then uppercase `P`, to open or focus this floating dashboard. Press `Esc` inside it to close it.
+
+On first launch, manually approve `RunCommands`, `ReadApplicationState`, and `ChangeApplicationState`. The plugin uses them once per second to locate and read the private JSON status files written under `${XDG_RUNTIME_DIR:-/tmp}/pi-zellij-status-$UID/`.
 
 ## Producer contract
 

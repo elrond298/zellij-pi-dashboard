@@ -298,6 +298,7 @@ impl ZellijPlugin for Dashboard {
         request_permission(&[
             PermissionType::RunCommands,
             PermissionType::ReadApplicationState,
+            PermissionType::ChangeApplicationState,
         ]);
         self.refresh();
         set_timeout(1.0);
@@ -331,6 +332,7 @@ impl ZellijPlugin for Dashboard {
             }
             Event::Key(key) if key.has_no_modifiers() => {
                 match key.bare_key {
+                    BareKey::Esc => close_focus(),
                     BareKey::Down | BareKey::Char('j') => self.scroll += 1,
                     BareKey::Up | BareKey::Char('k') => self.scroll = self.scroll.saturating_sub(1),
                     BareKey::Home | BareKey::Char('g') => self.scroll = 0,
@@ -346,9 +348,13 @@ impl ZellijPlugin for Dashboard {
         let lines = self.lines(cols, now_ms());
         let max_scroll = lines.len().saturating_sub(rows);
         self.scroll = self.scroll.min(max_scroll);
-        for line in lines.iter().skip(self.scroll).take(rows) {
-            println!("{}", clip(line, cols));
-        }
+        let visible = lines
+            .iter()
+            .skip(self.scroll)
+            .take(rows)
+            .map(|line| styled_line(&clip(line, cols)))
+            .collect();
+        print_nested_list_with_coordinates(visible, 0, 0, Some(cols), Some(rows));
     }
 }
 
@@ -370,6 +376,30 @@ fn elapsed(ms: u64) -> String {
         0..=59 => format!("{seconds}s"),
         60..=3599 => format!("{}m{:02}s", seconds / 60, seconds % 60),
         _ => format!("{}h{:02}m", seconds / 3600, seconds / 60 % 60),
+    }
+}
+
+fn styled_line(line: &str) -> NestedListItem {
+    let text = NestedListItem::new(line);
+    let content = line.trim_start();
+    if line.starts_with("PI DASHBOARD") {
+        text.color_all(0)
+    } else if line.starts_with('!') {
+        text.error_color_all()
+    } else if content.starts_with("● BUSY") {
+        text.color_substring(1, "● BUSY")
+    } else if content.starts_with("○ IDLE") {
+        text.success_color_substring("○ IDLE")
+    } else if content.starts_with('[') || content.starts_with("agent ") {
+        text.color_all(0)
+    } else if content.starts_with("goal ") {
+        text.color_all(3)
+    } else if content.starts_with("tool ") || content.starts_with('▶') {
+        text.color_all(2)
+    } else if content.starts_with('✓') {
+        text.success_color_all()
+    } else {
+        text
     }
 }
 
@@ -406,6 +436,10 @@ mod tests {
                 && rendered.contains("tool cargo")
                 && rendered.contains("agent background")
                 && rendered.contains("15 tok")
+        );
+        assert!(
+            styled_line("  goal ship").serialize()
+                != NestedListItem::new("  goal ship").serialize()
         );
     }
 }

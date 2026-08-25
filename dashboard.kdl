@@ -1,5 +1,11 @@
 layout {
-    pane {
-        plugin location="file:target/wasm32-wasip1/release/zellij-pi-dashboard.wasm"
+    floating_panes {
+        pane {
+            x "5%"
+            y "10%"
+            width "90%"
+            height "80%"
+            plugin location="file:target/wasm32-wasip1/release/zellij-pi-dashboard.wasm"
+        }
     }
 }
