@@ -555,6 +555,10 @@ export default function (pi: ExtensionAPI) {
     namingController = controller;
     void generateInstanceName(prompt, ctx, controller);
   };
+  const queueInstanceNaming = (prompt: string) => {
+    if (status.instanceName || pi.getSessionName() || namingController || pendingNamePrompt) return;
+    if (prompt.trim()) pendingNamePrompt = prompt;
+  };
 
   const normalizeGoalSummary = (output: string) => {
     const cleaned = output
@@ -723,6 +727,7 @@ export default function (pi: ExtensionAPI) {
       activeGoalText && goalSummary?.goalKey === goalKey(activeGoalText)
         ? goalSummary.summary
         : undefined;
+    if (activeGoalText) queueInstanceNaming(activeGoalText);
     status.goal = restoredSummary ?? activeGoalText;
     if (activeGoalText !== previousGoal || restoredSummary) cancelGoalSummary();
     if (activeGoalText) startGoalSummary(activeGoalText, ctx);
@@ -861,6 +866,7 @@ export default function (pi: ExtensionAPI) {
         status.goalDetail = undefined;
       }
       activeGoalText = goal;
+      queueInstanceNaming(goal);
       status.goal = goalSummary?.goalKey === goalKey(goal) ? goalSummary.summary : goal;
       startGoalSummary(goal, ctx);
     }

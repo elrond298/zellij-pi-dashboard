@@ -47,7 +47,15 @@ const ctx = {
     async complete(_model, request, options) {
       completions.push({ request, options });
       if (deferred) return deferred;
-      return { stopReason: "stop", content: [{ type: "text", text: completionText }] };
+      return {
+        stopReason: "stop",
+        content: [{
+          type: "text",
+          text: request.systemPrompt.includes("one specific lowercase English verb")
+            ? "refactor"
+            : completionText,
+        }],
+      };
     },
   },
 };
@@ -109,7 +117,15 @@ try {
   assert.equal(completions[0].options.toolChoice, "none");
   assert.equal(completions[0].options.maxRetries, 0);
   assert.equal(completions[0].options.timeoutMs, 15_000);
-
+  handlers.get("agent_settled")({}, ctx);
+  const named = await waitFor((status) => status.instanceName === "refactor");
+  assert.equal(named.instanceName, "refactor");
+  assert.equal(completions.length, 2);
+  assert.match(completions[1].request.systemPrompt, /one specific lowercase English verb/);
+  assert.equal(
+    completions[1].request.messages[0].content[0].text,
+    `Input text:\n---\n${goal.slice(0, 2000)}\n…\n${goal.slice(-2000)}\n---`,
+  );
   const summaryEntry = entries.find((entry) => entry.customType === "zellij-goal-summary");
   assert.deepEqual(summaryEntry.data, { goalKey: expectedGoalKey, summary });
   branch = [
@@ -125,7 +141,15 @@ try {
     (status) => status.goal === summary && status.goalDetail?.text === goal,
   );
   assert.equal(restored.goalDetail.text, goal);
-  assert.equal(completions.length, 1, "restored summary must not be regenerated");
+  assert.equal(completions.length, 2, "restored summary must not be regenerated");
+  handlers.get("agent_settled")({}, ctx);
+  await waitForCompletions(3);
+  await waitFor((status) => status.instanceName === "refactor");
+  assert.match(completions[2].request.systemPrompt, /one specific lowercase English verb/);
+  assert.equal(
+    completions[2].request.messages[0].content[0].text,
+    `Input text:\n---\n${goal.slice(0, 2000)}\n…\n${goal.slice(-2000)}\n---`,
+  );
 
   const shortGoal = "修复状态";
   handlers.get("message_start")(
@@ -134,7 +158,7 @@ try {
   );
   await waitFor((status) => status.goal === shortGoal);
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(completions.length, 1, "short goals must stay verbatim without a model call");
+  assert.equal(completions.length, 3, "short goals must stay verbatim without a model call");
 
   let resolveDeferred;
   deferred = new Promise((resolve) => {
@@ -146,7 +170,7 @@ try {
     { message: { content: `<goal_objective>${replacement}</goal_objective>` } },
     ctx,
   );
-  await waitForCompletions(2);
+  await waitForCompletions(4);
   const restoredReplacement =
     "Restore a different active goal and summarize its current objective ".repeat(4);
   branch = [
@@ -157,8 +181,8 @@ try {
     },
   ];
   handlers.get("before_agent_start")({}, ctx);
-  await waitForCompletions(3);
-  assert.equal(completions[1].options.signal.aborted, true, "restore must cancel the stale goal");
+  await waitForCompletions(5);
+  assert.equal(completions[3].options.signal.aborted, true, "restore must cancel the stale goal");
   handlers.get("tool_execution_end")({
     toolCallId: "goal-complete",
     toolName: "goal_complete",
@@ -177,7 +201,7 @@ try {
   );
   await handlers.get("session_shutdown")();
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(completions.length, 3, "shutdown must cancel a queued summary request");
+  assert.equal(completions.length, 5, "shutdown must cancel a queued summary request");
 } finally {
   await handlers.get("session_shutdown")();
   await rm(runtime, { recursive: true, force: true });
