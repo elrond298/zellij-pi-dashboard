@@ -20,6 +20,10 @@ ln -sfn "$PWD/extensions/zellij-status.ts" ~/.pi/agent/extensions/zellij-status.
 
 Restart running Pi processes after changing the extension.
 
+When a goal exceeds 48 terminal columns, the extension starts a separate asynchronous summary request and immediately returns control to Pi; shorter goals stay verbatim without a model call. The request receives only the goal text (capped at 4000 characters) plus a small dedicated system prompt, uses no tools or session context, times out after 15 seconds, and is cancelled when the goal changes, completes, or the session shuts down. The display-cell-bounded phrase is persisted for session restore while `goalDetail.text` retains the original goal.
+
+Goal summarization uses `PI_ZELLIJ_GOAL_MODEL=provider/model`. When unset it reuses `PI_ZELLIJ_NAME_MODEL`, whose default is `openai-codex/gpt-5.6-luna`.
+
 ## Build and open
 
 ```sh
@@ -75,10 +79,10 @@ type ContextUsage = { tokens?: number; contextWindow: number; percent?: number }
 type Workspace = { vcs: "git" | "jj"; root: string; name?: string; worktree?: boolean };
 ```
 
-`agents` lists every running agent first, followed by the three most recently ended agents. `workspace` identifies the current jj workspace first, then falls back to its Git repository/worktree. `mode` follows the persisted `plan-mode-transition` contract used by `@narumitw/pi-plan-mode`.
+`goal` is the compact status phrase when summarization succeeds and temporarily falls back to the original text while a summary is pending or unavailable; `goalDetail.text` always retains the original objective. `agents` lists every running agent first, followed by the three most recently ended agents. `workspace` identifies the current jj workspace first, then falls back to its Git repository/worktree. `mode` follows the persisted `plan-mode-transition` contract used by `@narumitw/pi-plan-mode`.
 
 `zjstatus/examples/pi-status.sh` consumes this layout and schema unchanged.
 
 Session headers resolve each Pi process to its live Zellij tab and pane names instead of showing the numeric pane ID.
 
-Use `Tab` to jump to the next Pi instance; use `j`/`k`, arrow keys, the mouse wheel, or `g` to scroll. Run `cargo test` for the parser/rendering check.
+Use `Tab` to jump to the next Pi instance; use `j`/`k`, arrow keys, the mouse wheel, or `g` to scroll. Run `cargo test` for parser/rendering checks and `node tests/zellij-status.mjs` for the status-extension goal lifecycle check.
