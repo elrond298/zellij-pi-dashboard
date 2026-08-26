@@ -245,6 +245,11 @@ impl Dashboard {
                 .or(session.instance_name.as_deref())
                 .unwrap_or("pi");
             let model = session.model.as_deref().unwrap_or("unknown model");
+            let thinking = session
+                .thinking
+                .as_deref()
+                .map(|level| format!("  {level}"))
+                .unwrap_or_default();
             let location = session
                 .pane_id
                 .as_deref()
@@ -252,7 +257,7 @@ impl Dashboard {
                 .map(|location| format!("  {location}"))
                 .unwrap_or_default();
             lines.push(format!(
-                "{state}{mode}  {name}{location}  {model}  pid:{}",
+                "{state}{mode}  {name}{location}  {model}{thinking}  pid:{}",
                 session.pid
             ));
             if let Some(cwd) = &session.cwd {
@@ -408,13 +413,8 @@ impl Dashboard {
                 } else {
                     0
                 };
-                let thinking = session
-                    .thinking
-                    .as_deref()
-                    .map(|level| format!(" · think {level}"))
-                    .unwrap_or_default();
                 lines.push(format!(
-                    "  Usage  {} tok · in {} · out {} · cache {} · {} calls · ${:.4} · elapsed {} · busy {}{}",
+                    "  Usage  {} tok · in {} · out {} · cache {} · {} calls · ${:.4} · elapsed {} · busy {}",
                     compact_tokens(tokens.total),
                     compact_tokens(tokens.input),
                     compact_tokens(tokens.output),
@@ -422,8 +422,7 @@ impl Dashboard {
                     tokens.tool_calls,
                     tokens.cost,
                     elapsed(now.saturating_sub(session.started_at)),
-                    elapsed(session.busy_ms + active_ms),
-                    thinking
+                    elapsed(session.busy_ms + active_ms)
                 ));
             }
             if let Some(context) = &session.context_usage {
